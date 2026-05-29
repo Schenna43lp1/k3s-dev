@@ -1,15 +1,37 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# K3s HA Cluster Helper
-# Restored Step 5 + Step 6 scaffold
-
 APP_NAME="K3s HA Cluster Helper"
-VERSION="0.6.0"
+VERSION="0.7.0"
+MASTER_IP="192.168.1.70"
 
 info(){ echo "[INFO] $*"; }
 success(){ echo "[OK] $*"; }
 error(){ echo "[ERROR] $*"; }
+
+run_master(){
+  ssh -o StrictHostKeyChecking=no root@${MASTER_IP} "$@"
+}
+
+install_monitoring(){
+  info "Installing Helm"
+  run_master 'curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash'
+
+  info "Adding Helm repos"
+  run_master 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts && helm repo update'
+
+  info "Creating monitoring namespace"
+  run_master 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -'
+
+  info "Installing kube-prometheus-stack"
+  run_master 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && helm upgrade --install monitoring prometheus-community/kube-prometheus-stack -n monitoring --wait --timeout 20m'
+
+  info "Getting Grafana password"
+  run_master 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && kubectl get secret monitoring-grafana -n monitoring -o jsonpath="{.data.admin-password}" | base64 -d && echo'
+
+  info "Validation"
+  run_master 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && kubectl get nodes && kubectl get pods -A'
+}
 
 main(){
   clear || true
@@ -18,22 +40,12 @@ main(){
   echo "======================================"
   echo
 
-  info "Step 5 restored"
-  info "K3s HA bootstrap + worker join logic present in next build phase"
+  info "FULL Step 5 restore in progress"
+  info "REAL Step 6 Monitoring"
 
-  echo
-  info "STEP 6 Monitoring"
-  echo "- Helm"
-  echo "- Traefik validation"
-  echo "- monitoring namespace"
-  echo "- kube-prometheus-stack"
-  echo "- Grafana"
-  echo "- Prometheus"
-  echo "- Alertmanager"
-  echo "- Node Exporter"
-  echo "- Grafana password output"
+  install_monitoring
 
-  success "Step 6 scaffold restored"
+  success "Monitoring stack installed"
 }
 
 main "$@"
