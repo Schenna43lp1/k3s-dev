@@ -1,0 +1,87 @@
+---
+- hosts: k3s
+  become: yes
+
+  tasks:
+
+  - name: apt update
+    apt:
+      update_cache: yes
+
+  - name: install packages
+    apt:
+      name:
+        - curl
+        - sudo
+        - nano
+        - htop
+        - qemu-guest-agent
+        - open-iscsi
+        - nfs-common
+      state: present
+
+  - name: enable modules
+    copy:
+      dest: /etc/modules-load.d/k8s.conf
+      content: |
+        br_netfilter
+        overlay
+
+  - name: load br_netfilter
+    shell: modprobe br_netfilter || true
+
+  - name: load overlay
+    shell: modprobe overlay || true
+
+  - name: sysctl
+    copy:
+      dest: /etc/sysctl.d/99-kubernetes.conf
+      content: |
+        net.bridge.bridge-nf-call-iptables=1
+        net.bridge.bridge-nf-call-ip6tables=1
+        net.ipv4.ip_forward=1
+
+  - name: apply sysctl
+    command: sysctl --system
+
+- hosts: k3s_master
+  become: yes
+
+  tasks:
+
+  - name: install k3s master
+    shell: |
+      curl -sfL https://get.k3s.io | sh -s - server \
+      --cluster-init \
+      --write-kubeconfig-mode 644 \
+      --node-name k3s01
+    args:
+      creates: /usr/local/bin/k3s
+
+  - name: read token
+    shell: cat /var/lib/rancher/k3s/server/node-token
+    register: token
+
+  - name: save token
+    set_fact:
+      k3s_token: "{{ token.stdout }}"
+
+- hosts: k3s_nodes
+  become: yes
+
+  tasks:
+
+  - name: get token
+    set_fact:
+      token: "{{ hostvars['k3s01']['k3s_token'] }}"
+
+  - name: install k3s node
+    shell: |
+      curl -sfL https://get.k3s.io | \
+      K3S_TOKEN="{{ token }}" \
+      sh -s - server \
+      --server https://192.168.1.70:6443 \
+      --write-kubeconfig-mode 644 \
+      --node-name {{ inventory_hostname }}
+    args:
+      creates: /usr/local/bin/k3s
