@@ -33,7 +33,7 @@
   - name: load overlay
     shell: modprobe overlay || true
 
-  - name: sysctl
+  - name: sysctl kubernetes config
     copy:
       dest: /etc/sysctl.d/99-kubernetes.conf
       content: |
@@ -41,8 +41,11 @@
         net.bridge.bridge-nf-call-ip6tables=1
         net.ipv4.ip_forward=1
 
-  - name: apply sysctl
-    command: sysctl --system
+  - name: apply kubernetes sysctl only
+    shell: |
+      sysctl -w net.bridge.bridge-nf-call-iptables=1 || true
+      sysctl -w net.bridge.bridge-nf-call-ip6tables=1 || true
+      sysctl -w net.ipv4.ip_forward=1 || true
 
 - hosts: k3s_master
   become: yes
@@ -58,13 +61,18 @@
     args:
       creates: /usr/local/bin/k3s
 
+  - name: wait for token
+    wait_for:
+      path: /var/lib/rancher/k3s/server/node-token
+      timeout: 120
+
   - name: read token
     shell: cat /var/lib/rancher/k3s/server/node-token
     register: token
 
   - name: save token
     set_fact:
-      k3s_token: "{{ token.stdout }}"
+      k3s_token: '{{ token.stdout }}'
 
 - hosts: k3s_nodes
   become: yes
@@ -73,12 +81,12 @@
 
   - name: get token
     set_fact:
-      token: "{{ hostvars['k3s01']['k3s_token'] }}"
+      token: '{{ hostvars["k3s01"]["k3s_token"] }}'
 
   - name: install k3s node
     shell: |
       curl -sfL https://get.k3s.io | \
-      K3S_TOKEN="{{ token }}" \
+      K3S_TOKEN='{{ token }}' \
       sh -s - server \
       --server https://192.168.1.70:6443 \
       --write-kubeconfig-mode 644 \
