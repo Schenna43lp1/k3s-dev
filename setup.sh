@@ -12,11 +12,21 @@ echo "=== Installiere Pakete ==="
 apt update
 apt install -y ansible sshpass iptables nftables
 
+mkdir -p ~/.ansible
+cat > ~/.ansible.cfg <<EOF
+[defaults]
+host_key_checking=False
+timeout=30
+EOF
+
 echo "=== Host Kernel Module ==="
 modprobe br_netfilter || true
 modprobe overlay || true
 grep -q br_netfilter /etc/modules || echo br_netfilter >> /etc/modules
 grep -q overlay /etc/modules || echo overlay >> /etc/modules
+
+echo "=== SSH Cleanup ==="
+rm -f /root/.ssh/known_hosts || true
 
 echo "=== Erstelle LXCs ==="
 chmod +x create-k3s-lxc.sh
@@ -28,46 +38,28 @@ for id in 701 702 703; do
   CONF="/etc/pve/lxc/$id.conf"
 
   grep -q "lxc.apparmor.profile: unconfined" "$CONF" || echo "lxc.apparmor.profile: unconfined" >> "$CONF"
-  grep -q "^lxc.cap.drop:" "$CONF" || echo "lxc.cap.drop:" >> "$CONF"
+  grep -q "lxc.apparmor.profile: unconfined" "$CONF" || echo "lxc.apparmor.allow_nesting: 1" >> "$CONF"
   grep -q "lxc.mount.auto: proc:rw sys:rw" "$CONF" || echo "lxc.mount.auto: proc:rw sys:rw" >> "$CONF"
   grep -q "/dev/kmsg dev/kmsg" "$CONF" || echo "lxc.mount.entry: /dev/kmsg dev/kmsg none bind,create=file,optional" >> "$CONF"
 
   pct start $id
-  sleep 5
-done
-
-echo "=== Warte auf Container Start ==="
-sleep 20
-
-echo "=== Test /dev/kmsg ==="
-for id in 701 702 703; do
-  echo "CT $id"
-  pct exec $id -- timeout 2 cat /dev/kmsg | head || true
+  sleep 8
 done
 
 echo "=== SSH Vorbereitung ==="
-if [ ! -f /root/.ssh/id_rsa ]; then
-    ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa
+if [ ! -f /root/.ssh/id_ed25519 ]; then
+    ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
 fi
 
-sshpass -p changeme ssh-copy-id -o StrictHostKeyChecking=no root@192.168.1.70 || true
-sshpass -p changeme ssh-copy-id -o StrictHostKeyChecking=no root@192.168.1.71 || true
-sshpass -p changeme ssh-copy-id -o StrictHostKeyChecking=no root@192.168.1.72 || true
+for ip in 192.168.1.70 192.168.1.71 192.168.1.72; do
+  ssh-keyscan -H $ip >> /root/.ssh/known_hosts 2>/dev/null || true
+  sshpass -p changeme ssh-copy-id -o StrictHostKeyChecking=no root@$ip || true
+done
 
-echo "=== Cleanup alter K3s States ==="
-pct exec 701 -- systemctl stop k3s || true
-pct exec 702 -- /usr/local/bin/k3s-uninstall.sh || true
-pct exec 703 -- /usr/local/bin/k3s-uninstall.sh || true
-pct exec 702 -- rm -rf /var/lib/rancher /etc/rancher || true
-pct exec 703 -- rm -rf /var/lib/rancher /etc/rancher || true
-pct exec 701 -- rm -rf /var/lib/rancher/k3s/server/db/* || true
-pct exec 701 -- rm -rf /var/lib/rancher/k3s/server/tls || true
-
-echo "=== Cluster Reset k3s01 ==="
-pct exec 701 -- sh -c 'k3s server --cluster-reset || true'
-sleep 10
-pct exec 701 -- systemctl start k3s || true
-sleep 40
+echo "=== Test SSH ==="
+ssh root@192.168.1.70 hostname || true
+ssh root@192.168.1.71 hostname || true
+ssh root@192.168.1.72 hostname || true
 
 echo "=== Deploy K3s Cluster via Ansible ==="
 ansible-playbook -i inventory.ini site.yml
