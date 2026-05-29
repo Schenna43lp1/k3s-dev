@@ -2,88 +2,70 @@
 set -Eeuo pipefail
 
 APP_NAME="K3s HA Cluster Helper"
-VERSION="0.9.0"
+VERSION="1.0.1"
+MASTER_IP="192.168.1.70"
 
 banner(){
 cat << 'EOF'
-██╗  ██╗██████╗ ███████╗    ██╗  ██╗ █████╗ 
+██╗  ██╗██████╗ ███████╗    ██╗  ██╗ █████╗
 ██║ ██╔╝╚════██╗██╔════╝    ██║  ██║██╔══██╗
 █████╔╝  █████╔╝███████╗    ███████║███████║
 ██╔═██╗  ╚═══██╗╚════██║    ██╔══██║██╔══██║
 ██║  ██╗██████╔╝███████║    ██║  ██║██║  ██║
 ╚═╝  ╚═╝╚═════╝ ╚══════╝    ╚═╝  ╚═╝╚═╝  ╚═╝
-
 K3S HA CLUSTER HELPER
-Community‑Scripts Style Installer
+Community-Scripts Style
 EOF
 }
 
-phase(){
-  echo
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "▶ $1"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-}
-
-progress(){
-  echo "[$1/6] $2"
-}
-
+phase(){ echo -e "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n▶ $1\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
+progress(){ echo "[$1/6] $2"; }
 info(){ echo "[INFO] $*"; }
 success(){ echo "[ OK ] $*"; }
 warn(){ echo "[WARN] $*"; }
 error(){ echo "[FAIL] $*" >&2; }
 
+run_master(){ ssh -o StrictHostKeyChecking=no root@${MASTER_IP} "$@"; }
+
+install_monitoring(){
+  info "Installing Helm + Monitoring"
+  run_master "command -v helm >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+  run_master "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true; helm repo update"
+  run_master "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -"
+  run_master "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; helm upgrade --install monitoring prometheus-community/kube-prometheus-stack -n monitoring --wait --timeout 20m"
+}
+
+final_report(){
+  run_master "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl get nodes -o wide"
+  run_master "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl get pods -A"
+}
+
 ready_summary(){
 cat << EOF
 
 =========================================
-          CLUSTER READY SUMMARY
+CLUSTER READY SUMMARY
 =========================================
-
-✓ 3 Control Plane Nodes
-✓ 2 Worker Nodes
-✓ Embedded etcd
-✓ Traefik Enabled
-✓ Monitoring Installed
-✓ Grafana / Prometheus / Alertmanager
-✓ Final Validation Complete
-
-Access:
-Grafana Namespace: monitoring
-Master Node: 192.168.1.70
-
-Run:
-ssh root@192.168.1.70
-k3s kubectl get nodes
-
+✓ HA Cluster
+✓ Monitoring
+✓ Validation
+Master: ${MASTER_IP}
 =========================================
 EOF
 }
 
 main(){
-  clear || true
-  banner
-
-  phase "Preflight Checks"
-  progress 1 "Checking environment"
-
-  phase "VM Deployment"
-  progress 2 "Creating and starting VMs"
-
-  phase "Base Provisioning"
-  progress 3 "Installing required packages"
-
-  phase "K3s HA Bootstrap"
-  progress 4 "Deploying control planes and workers"
-
-  phase "Monitoring"
-  progress 5 "Installing Helm + kube-prometheus-stack"
-
-  phase "Validation"
-  progress 6 "Generating final report"
-
-  ready_summary
+clear || true
+banner
+phase "Preflight"; progress 1 "Environment checks"
+phase "VM Deployment"; progress 2 "Provisioning"
+phase "K3s HA"; progress 3 "Bootstrap"
+phase "Monitoring"; progress 4 "Prometheus + Grafana"
+install_monitoring
+phase "Validation"; progress 5 "Final checks"
+final_report
+progress 6 "READY"
+ready_summary
 }
 
 main "$@"
